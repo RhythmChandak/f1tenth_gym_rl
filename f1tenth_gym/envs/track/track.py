@@ -458,3 +458,52 @@ class Track:
 
         phi = phi - yaw
         return s, ey, np.arctan2(np.sin(phi), np.cos(phi))
+    
+    def get_closest_index_on_trajectory(self, x, y, use_raceline=False):
+        """
+        Get the closest index on the trajectory to the given point (x, y).
+
+        Parameters
+        ----------
+        x : float
+            x-coordinate of the point
+        y : float
+            y-coordinate of the point
+        use_raceline : bool, optional
+            whether to use the raceline or centerline, by default False
+
+        Returns
+        -------
+        int
+            index of the closest point on the trajectory
+        """
+        line = self.raceline if use_raceline else self.centerline
+        
+        # Find the closest x, y among the line.xs, line.ys arrays.
+        distances = np.sqrt((line.xs - x) ** 2 + (line.ys - y) ** 2)
+        closest_index = np.argmin(distances)
+        return closest_index
+    
+    def get_ref_trajectory(self, idx, n, use_raceline=False):
+        """
+        Get the reference trajectory around the given index.
+
+        Parameters
+        ----------
+        idx : int
+            index of the starting point on the trajectory
+        n : int
+            number of points to return ahead of the index in a cicular manner
+        use_raceline : bool, optional
+            whether to use the raceline or centerline, by default False
+
+        Returns
+        -------
+        Tuple[np.ndarray, np.ndarray]
+            x and y coordinates of the reference trajectory
+        """
+        line = self.raceline if use_raceline else self.centerline
+        indices = [(idx + i) % len(line.ss) for i in range(n)]
+        xs = np.array([line.xs[i] for i in indices])
+        ys = np.array([line.ys[i] for i in indices])
+        return xs, ys
