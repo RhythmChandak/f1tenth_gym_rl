@@ -20,6 +20,26 @@ def denorm_action(action, params):
 
         return action
 
+def normalise_action(action, params):
+        """
+        Normalises the action to be within -1, 1
+        """
+
+        v_min = params['v_min']
+        v_max = params['v_max']
+
+        if action.shape == (2,):
+            action[0] = 2*(action[0] - params['s_min'])/(params['s_max'] - params['s_min']) - 1
+            action[1] = 2*(action[1] - v_min)/(v_max - v_min) - 1
+        elif action.shape == (1, 2):
+            action[0][0] = 2*(action[0][0] - params['s_min'])/(params['s_max'] - params['s_min']) - 1
+            action[0][1] = 2*(action[0][1] - v_min)/(v_max - v_min) - 1
+        else:
+            action[0][0] = 2*(action[0][0] - params['s_min'])/(params['s_max'] - params['s_min']) - 1
+            action[1][0] = 2*(action[1][0] - v_min)/(v_max - v_min) - 1
+
+        return action
+
 def normalise_observation(obs, params, with_lidar=True):
     """
     Normalises the base observation.
@@ -43,37 +63,38 @@ def normalise_observation(obs, params, with_lidar=True):
     min_scan = 0
     if with_lidar:
         obs['scans'] = np.clip(obs['scans'], min_scan, max_scan)
-        obs['scans'] -= (max_scan-min_scan)/2
+        obs['scans'] -= (max_scan+min_scan)/2
         obs['scans'] *= 2/(max_scan - min_scan)
 
+    #TODO: get track width from env, write the code to calculate track with at every point in
     max_deviation = 10*params['width']
     min_deviation = 0
     obs['deviation'] = np.clip(obs['deviation'], min_deviation, max_deviation)
-    obs['deviation'] -= (max_deviation-min_deviation)/2
+    obs['deviation'] -= (max_deviation+min_deviation)/2
     obs['deviation'] *= 2/(max_deviation - min_deviation)
 
     max_rel_heading = np.pi
     min_rel_heading = -np.pi
     obs['rel_heading'] = np.clip(obs['rel_heading'], min_rel_heading, max_rel_heading)
-    obs['rel_heading'] -= (max_rel_heading-min_rel_heading)/2
+    obs['rel_heading'] -= (max_rel_heading+min_rel_heading)/2
     obs['rel_heading'] *= 2/(max_rel_heading - min_rel_heading)
 
     max_longitudinal_vel = params['v_max']
     min_longitudinal_vel = params['v_min']
     obs['longitudinal_vel'] = np.clip(obs['longitudinal_vel'], min_longitudinal_vel, max_longitudinal_vel)
-    obs['longitudinal_vel'] -= (max_longitudinal_vel-min_longitudinal_vel)/2
+    obs['longitudinal_vel'] -= (max_longitudinal_vel+min_longitudinal_vel)/2
     obs['longitudinal_vel'] *= 2/(max_longitudinal_vel - min_longitudinal_vel)
 
     max_later_vel = params['v_max']
     min_later_vel = params['v_min']
     obs['later_vel'] = np.clip(obs['later_vel'], min_later_vel, max_later_vel)
-    obs['later_vel'] -= (max_later_vel-min_later_vel)/2
+    obs['later_vel'] -= (max_later_vel+min_later_vel)/2
     obs['later_vel'] *= 2/(max_later_vel - min_later_vel)
 
     max_yaw_rate = 3.2 
     min_yaw_rate = -3.2
     obs['yaw_rate'] = np.clip(obs['yaw_rate'], min_yaw_rate, max_yaw_rate)
-    obs['yaw_rate'] -= (max_yaw_rate-min_yaw_rate)/2
+    obs['yaw_rate'] -= (max_yaw_rate+min_yaw_rate)/2
     obs['yaw_rate'] *= 2/(max_yaw_rate - min_yaw_rate)
 
     return obs
@@ -85,7 +106,7 @@ def normalise_trajectory(traj, traj_len):
     max_traj = traj_len
     min_traj = -traj_len
     trajectory = np.clip(traj, min_traj, max_traj)
-    trajectory -= (max_traj-min_traj)/2
+    trajectory -= (max_traj+min_traj)/2
     trajectory *= 2/(max_traj - min_traj)
 
     return trajectory
