@@ -2,6 +2,8 @@ import numpy as np
 from abc import abstractmethod
 import logging
 
+from f1tenth_gym.envs.track import track
+
 class Reward:
     """
     Base class for rewards in the F1Tenth Gym environment for RL agents.
@@ -23,7 +25,7 @@ class Reward:
 
     # abstract method for get reward
     @abstractmethod
-    def get_reward(self, obs, action):
+    def get_reward(self, obs, action, prev_obs=None, prev_action=None):
         """
         Abstract method to compute the reward based on the observation and action.
 
@@ -41,22 +43,24 @@ class Reward:
         :param deviation: The deviation from the track center.
         :return: The calculated penalty.
         """
-        deviation_in_percentage = abs(deviation) / self.env.calculate_half_track_width(deviation)
-        if deviation_in_percentage < self.config_args.get("deviation_penalty_threshold", 0.1):
+        #TODO: get track half width from env; write a function to get half width
+        # track.half_width = 5.0  # Placeholder value, replace with actual track half width
+        deviation_in_percentage = abs(deviation)
+        if deviation_in_percentage < self.config_args.get("deviation_penalty_threshold", 1.5 * self.config_args.get("params", {}).get("width", 0.31)):
             deviation_in_percentage = 0
 
-        return -deviation_in_percentage * self.config_args.get("deviation_penalty_coefficient", 1.0)
+        return -deviation_in_percentage * self.config_args.get("deviation_penalty_coefficient", 50.0)
     
     def calc_rel_heading_penalty(self, rel_heading):
         """
         Calculate the penalty based on the relative heading of the vehicle.
-        The penalty is calculated as a percentage of the relative heading.
+        The penalty is calculated as a percentage of the max steering angle.
         If the relative heading is below a certain threshold, the penalty is set to zero.
         s_max is the maximum steering angle of the vehicle.
         :param rel_heading: The relative heading of the vehicle.
         :return: The calculated penalty.
         """
-        rel_heading_in_percentage = abs(rel_heading) / self.env.s_max
+        rel_heading_in_percentage = abs(rel_heading) / self.config_args.get("params", {}).get("s_max", np.pi/2)  # Assuming s_max is in radians
         # Ensure the relative heading is within the range of 0 to 1
         rel_heading_in_percentage = np.clip(rel_heading_in_percentage, 0, 1)
         if rel_heading_in_percentage < self.config_args.get("rel_heading_penalty_threshold", 0):
@@ -64,7 +68,7 @@ class Reward:
 
         return -rel_heading_in_percentage * self.config_args.get("rel_heading_penalty_coefficient", 0.25)
     
-    def calc_action_smoothness_penalty(self, action):
+    def calc_action_smoothness_penalty(self, action, prev_action=None):
         """
         Calculate the penalty based on the smoothness of the action.
         The penalty is calculated based on the difference between the current action and the previous action.
@@ -75,8 +79,8 @@ class Reward:
         :return: The calculated penalty.
         """
         try:
-            prev_steering = self.env.last_actions[0][0]
-            prev_speed = self.env.last_actions[0][1]
+            prev_steering = prev_action[0, 0]
+            prev_speed = prev_action[0, 1]
         except TypeError: 
             logging.error("No previous actions found. Returning 0 as penalty. This happens at the first iteration")
             return 0
@@ -84,22 +88,25 @@ class Reward:
             logging.error("No previous actions found. Returning 0 as penalty.")
             return 0
         
-        steer_delta = abs(prev_steering - action[0, 0])/self.env.s_max
-        speed_delta = abs(prev_speed - action[0, 1])/self.env.v_max
+        steer_delta = abs(prev_steering - action[0, 0])/self.config_args.get("car_params", {}).get("s_max", np.pi/2)
+        speed_delta = abs(prev_speed - action[0, 1])/self.config_args.get("car_params", {}).get("v_max", 1.0)
         
-        steer_penalty = steer_delta * self.config_args.get("steer_smoothness_penalty_coefficient", 1.0)
-        speed_penalty = speed_delta * self.config_args.get("speed_smoothness_penalty_coefficient", 1.0)
+        steer_penalty = -steer_delta * self.config_args.get("steer_smoothness_penalty_coefficient", 1.0)
+        speed_penalty = -speed_delta * self.config_args.get("speed_smoothness_penalty_coefficient", 0.25)
         
         return steer_penalty + speed_penalty
 
-    def get_reward_adv(self):
+    def get_reward_adv(self, current_progress, previous_progress=0):
         """
         Returns the advancement of last timestep calculated along the central line
         """
-        adv = self.env.frenet_s - self.env.prev_frenet_s
-        max_adv = self.env.v_max * self.env.timestep
+        adv = current_progress - previous_progress
+        raceline_length = self.env.track.raceline.ss[-1]
+        if adv < 0:
+            adv += raceline_length
+        max_adv = self.config_args.get("car_params", {}).get("v_max", 5.0) * self.env.timestep
         adv_percentage = adv / max_adv
-        return adv_percentage
+        return adv_percentage * self.config_args.get("advancement_reward_coefficient", 50.0)
     
     def get_reward_speed(self):
         """
@@ -107,15 +114,16 @@ class Reward:
         The speed is normalized by the maximum speed of the vehicle.
         """
         speed = self.env.sim.agents[self.env.ego_idx].state[3]
-        return speed / self.env.v_max
+        speed_percentage = speed / self.config_args.get("car_params", {}).get("v_max", 5.0)
+        return speed_percentage * self.config_args.get("speed_reward_coefficient", 2.0)
     
     def get_reward_collision(self):
         """
         Returns a penalty for collision.
-        If the vehicle is in collision, the penalty is -1.0, otherwise 0.0.
+        If the vehicle is in collision, the penalty is -100.0, otherwise 0.0.
         """
         if self.env.sim.agents[self.env.ego_idx].collision:
-            return -1.0
+            return -100.0
         return 0.0
     
     def get_reward_tire_slip(self):
@@ -142,8 +150,6 @@ class Reward:
         if lap_time == 0:
             return 0.0
         return lap_time / self.env.max_lap_time
-    
-
     
 
     
