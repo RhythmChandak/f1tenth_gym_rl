@@ -3,6 +3,7 @@ from abc import abstractmethod
 from typing import List
 
 import gymnasium as gym
+from gymnasium import spaces
 import numpy as np
 from ..envs import track
 from tf_transformations import euler_from_quaternion
@@ -10,15 +11,16 @@ from ..envs import normalization
 
 
 # copy this function to anywhere you want
-def transform_point_to_car_frame(self, point, car_pose):
+def transform_point_to_car_frame(self, point, car_state):
     # Transform the point to the car's frame
-    x = point[0] - car_pose.position.x
-    y = point[1] - car_pose.position.y
+    x = point[0] - car_state[0]
+    y = point[1] - car_state[1]
     # Rotate the point to the car's frame
-    yaw = euler_from_quaternion([car_pose.orientation.x,
-                                    car_pose.orientation.y,
-                                    car_pose.orientation.z,
-                                    car_pose.orientation.w])[2]
+    # yaw = euler_from_quaternion([car_state[3],
+    #                                 car_state[4],
+    #                                 car_state[5],
+    #                                 car_state[6]])[2]
+    yaw = car_state[4]
     x_car = x * np.cos(yaw) + y * np.sin(yaw)
     y_car = -x * np.sin(yaw) + y * np.cos(yaw)
     return np.array([x_car, y_car])
@@ -126,7 +128,6 @@ class OriginalObservation(Observation):
             self.env.unwrapped.sim.agents[0].scan_simulator.max_range + 0.5
         )  # add 1.0 to avoid small errors
         large_num = 1e30  # large number to avoid unbounded obs space (ie., low=-inf or high=inf)
-
         obs_space = gym.spaces.Dict(
             {
                 "ego_idx": gym.spaces.Discrete(num_agents),
@@ -251,7 +252,6 @@ class TrajBasedObservation(Observation):
 
     def __init__(self, env):
         super().__init__(env)
-        self.traj_len = 20
         self.config_args = env.config
         self.track = track.Track.from_track_name(self.config_args["track_name"])
 
@@ -262,73 +262,9 @@ class TrajBasedObservation(Observation):
             self.env.unwrapped.sim.agents[0].scan_simulator.max_range + 0.5
         )  # add 1.0 to avoid small errors
         large_num = 1e30  # large number to avoid unbounded obs space (ie., low=-inf or high=inf)
-        obs_space = gym.spaces.Dict(
-            {
-                "ego_idx": gym.spaces.Discrete(num_agents),
-                "scans": gym.spaces.Box(
-                    low=0.0,
-                    high=scan_range,
-                    shape=(num_agents, scan_size),
-                    dtype=np.float32,
-                ),
-                "progress_along_track": gym.spaces.Box(
-                    low=-large_num,
-                    high=large_num,
-                    shape=(num_agents, ), 
-                    dtype=np.float32,
-                ), 
-                "deviation": gym.spaces.Box(
-                    low = 0.0,
-                    high = large_num,
-                    shape=(num_agents,),
-                    dtype=np.float32,
-                ),
-                "rel_heading":gym.spaces.Box(
-                    low=-np.pi,
-                    high=np.pi,
-                    shape=(num_agents,),
-                    dtype=np.float32,
-                ),
-                "longitudinal_vel": gym.spaces.Box(
-                    low=-large_num,
-                    high=large_num,
-                    shape=(num_agents,),
-                    dtype=np.float32,
-                ),
-                "later_vel": gym.spaces.Box(
-                    low=-large_num,
-                    high=large_num,
-                    shape=(num_agents,),
-                    dtype=np.float32,
-                ),
-                "yaw_rate": gym.spaces.Box(
-                    low=-3.2,
-                    high=3.2,
-                    shape=(num_agents,),
-                    dtype=np.float32,
-                ),
-                "traj_car_frame": gym.spaces.Box(
-                    low=0,
-                    high=self.traj_len,
-                    shape=(num_agents, self.traj_len * 2),  # 2 for x and y coordinates
-                    dtype=np.float32,
-                ),
-                "collision": gym.spaces.Box(
-                    low=0.0, high=1.0, shape=(num_agents,), dtype=np.float32
-                ),
-                "lap_time": gym.spaces.Box(
-                    low=0.0, high=large_num, shape=(num_agents,), dtype=np.float32
-                ),
-                "lap_count": gym.spaces.Box(
-                    low=0.0, high=large_num, shape=(num_agents,), dtype=np.float32
-                ),
-                "sim_time": gym.spaces.Box(
-                    low=0.0, high=large_num, shape=(), dtype=np.float32
-                ),
-            }
-        )
-        return obs_space
-    
+        obsdim = (self.config_args["scans_num_sectors"] + self.config_args["traj_len"] + 8)*num_agents  # lidar_num + traj + 8 state features
+        return spaces.Box(-np.ones(obsdim, dtype=np.float32), np.ones(obsdim, dtype=np.float32))     
+
     def observe(self):
 
         observation={}
@@ -339,13 +275,13 @@ class TrajBasedObservation(Observation):
 
             std_state = agent.standard_state
             progress_along_track, deviation, rel_heading = self.track.cartesian_to_frenet(
-                std_state[0], std_state[1], std_state[4])
+                std_state[0], std_state[1], std_state[4], use_raceline=True)
             closest_point_on_traj = self.track.get_closest_index_on_trajectory(
-                std_state[0], std_state[1])
-            car_position = self.env.unwrapped.sim.agents[i].state[:2]
-            trajectory = self.track.get_ref_trajectory(closest_point_on_traj, self.traj_len)
+                std_state[0], std_state[1], use_raceline=True)
+            car_state = self.env.unwrapped.sim.agents[i].state
+            trajectory = self.track.get_ref_trajectory(closest_point_on_traj, self.config_args["traj_len"], use_raceline=True)
             trajectory_car_frame = np.array([
-                transform_point_to_car_frame(self, point, car_position) for point in trajectory
+                transform_point_to_car_frame(self, point, car_state) for point in trajectory
              ]).flatten()
             longitudinal_vel = std_state[3] * np.cos(std_state[6])
             later_vel = std_state[3] * np.sin(std_state[6])
@@ -365,9 +301,10 @@ class TrajBasedObservation(Observation):
                 "lap_time": self.env.unwrapped.lap_times[i],
                 "lap_count": self.env.unwrapped.lap_counts[i],
                 "sim_time": self.env.unwrapped.sim_time,
+                "timestep": self.config_args["timestep"],
             }
         
-        observation[agent.agent_id] = agent_obs
+        observation[self.env.agent_ids[i]] = agent_obs
 
          # cast to match observation space
         for key in observation.keys():
@@ -378,24 +315,40 @@ class TrajBasedObservation(Observation):
 
         return observation
     
+    def aggregate_lidar_scans(self, scans, num_sectors=30):
+        sector_size = len(scans) // num_sectors
+        aggregated_scans = [
+            np.min(scans[i * sector_size : (i + 1) * sector_size])
+            for i in range(num_sectors)
+        ]
+        return np.array(aggregated_scans, dtype=np.float32)
+    
     def vectorize_obs(self, observation_dict, norm_action):
         # keys = ['scans', 'traj_car_frame','progress_along_track' 'deviation', 'rel_heading', 'longitudinal_vel', 'later_vel', 'yaw_rate']
-        keys = ['scans', 'traj_car_frame', 'deviation', 'rel_heading', 'longitudinal_vel', 'later_vel', 'yaw_rate','norm_action']
-        
+        #TODO: Handle multi-agent case
+        # for i in range(self.env.unwrapped.num_agents):
+        #     if self.env.unwrapped.sim.ego_idx == i:
+        #         print(observation_dict.keys())
+        #         observation_dict = observation_dict[self.env.agent_ids[i]]
+        #         break
+
+        # keys = ['scans', 'traj_car_frame', 'deviation', 'rel_heading', 'longitudinal_vel', 'later_vel', 'yaw_rate', "timestep", 'norm_action']
+        keys = ['scans', 'deviation', 'rel_heading', 'longitudinal_vel', 'later_vel', 'yaw_rate', "timestep", 'norm_action']
         scans = observation_dict['scans']
-        scans = [scans[180+4*18*i] for i in range(11)]
+        scans = self.aggregate_lidar_scans(scans, num_sectors=self.config_args["scans_num_sectors"])
         observation_dict['scans'] = np.array(scans, dtype=np.float32)
-        observation_dict_norm = normalization.normalise_observation(observation_dict)
-        observation_dict_norm = normalization.normalise_trajectory(observation_dict_norm, self.traj_len)
+        observation_dict_norm = normalization.normalise_observation(observation_dict, self.config_args['params'], with_lidar=True)
+        # observation_dict_norm['traj_car_frame'] = normalization.normalise_trajectory(observation_dict_norm['traj_car_frame'], self.config_args['traj_len'])
 
         vectorized_obs = []
         for key in keys:
             if key == 'norm_action':
-                vectorized_obs.append(norm_action)
+                vectorized_obs.append(norm_action.flatten())
             else:
                 vectorized_obs.append(observation_dict_norm[key].flatten())
+            print(key, vectorized_obs[-1].shape)
         vectorized_obs = np.concatenate(vectorized_obs, axis=0)
-
+        vectorized_obs = np.array(vectorized_obs, dtype=np.float32)
         return vectorized_obs
         
 
